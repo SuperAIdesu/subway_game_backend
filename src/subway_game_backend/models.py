@@ -57,6 +57,22 @@ class StopTime(BaseModel):
     stop_sequence: int
 
 
+class RouteShape(BaseModel):
+    """A polyline describing a line's track, for map plotting.
+
+    Coordinates are `[lon, lat]` pairs (GeoJSON order), ready to feed to
+    Leaflet/Mapbox polyline layers.
+    """
+
+    route_id: str
+    direction_id: int | None = Field(
+        default=None,
+        description="0 = uptown, 1 = downtown; null when both directions are merged",
+    )
+    coordinates: list[list[float]] = Field(description="[lon, lat] pairs along the track")
+    num_points: int
+
+
 class NextTrip(Trip):
     """A trip passing through a station, with the time it will be there.
 

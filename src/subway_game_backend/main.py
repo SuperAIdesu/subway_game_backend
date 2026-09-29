@@ -9,12 +9,12 @@ from typing import Literal
 from fastapi import FastAPI, HTTPException, Query
 
 from . import gtfs
-from .models import NextTrip, Route, Station, StopTime, Trip
+from .models import NextTrip, Route, RouteShape, Station, StopTime, Trip
 
 app = FastAPI(
     title="NYC Subway GTFS API",
     description="API over MTA subway GTFS data: lines, stations, trips, stop times.",
-    version="0.5.0",
+    version="0.6.0",
 )
 
 
@@ -102,6 +102,52 @@ def get_trip_stoptimes(
     if stop_times is None:
         raise HTTPException(status_code=404, detail=f"Unknown trip id: {trip_id}")
     return stop_times
+
+
+@app.get("/get_route_shape", response_model=RouteShape, operation_id="get_route_shape")
+def get_route_shape(
+    route_id: str = Query(description="GTFS route_id, e.g. 1 or A"),
+    direction_id: int | None = Query(
+        default=None,
+        ge=0,
+        le=1,
+        description="Restrict to one direction (0 = uptown, 1 = downtown); omit to merge all shapes of the line",
+    ),
+    simplify: bool = Query(
+        default=False,
+        description="Reduce the point count (Douglas-Peucker) for lighter map payloads",
+    ),
+) -> RouteShape:
+    """Get the track polyline of a line, for map plotting.
+
+    Coordinates are `[lon, lat]` pairs (GeoJSON order). The polyline covers
+    every variant the line runs: the longest shape forms the backbone, with
+    branch/loop segments merged in.
+    """
+    data = gtfs.load_data()
+    if route_id not in data.routes:
+        raise HTTPException(status_code=404, detail=f"Unknown route id: {route_id}")
+    if direction_id is not None and not any(
+        trip.direction_id == direction_id for trip in data.trips_by_route.get(route_id, ())
+    ):
+        raise HTTPException(
+            status_code=404, detail=f"Route {route_id} has no direction_id={direction_id} trips"
+        )
+    coordinates = data.route_shape(route_id, direction_id, SIMPLIFY_TOLERANCE if simplify else None)
+    if not coordinates:
+        raise HTTPException(
+            status_code=404, detail=f"No shape data available for route: {route_id}"
+        )
+    return RouteShape(
+        route_id=route_id,
+        direction_id=direction_id,
+        coordinates=coordinates,
+        num_points=len(coordinates),
+    )
+
+
+#: Douglas-Peucker tolerance (degrees, ~55m) applied when `simplify=true`.
+SIMPLIFY_TOLERANCE = 0.0005
 
 
 @app.get("/get_next_trips", response_model=list[NextTrip], operation_id="get_next_trips")

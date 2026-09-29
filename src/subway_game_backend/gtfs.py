@@ -23,6 +23,43 @@ GTFS_TIME_PATTERN = r"^\d{1,2}:\d{2}:\d{2}$"
 #: Service-day types accepted by `get_next_trips`, mapped to calendar columns.
 DayType = Literal["weekday", "saturday", "sunday"]
 
+#: Snap distance (degrees, ~11m) below which a merged-shape point is treated
+#: as already covered by the polyline built so far.
+MERGE_SNAP = 0.0001
+
+
+def _perpendicular_distance(point: list[float], start: list[float], end: list[float]) -> float:
+    """Distance (degrees) from `point` to the segment start->end."""
+    dx, dy = end[0] - start[0], end[1] - start[1]
+    if dx == 0 and dy == 0:
+        return ((point[0] - start[0]) ** 2 + (point[1] - start[1]) ** 2) ** 0.5
+    scale = ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / (dx * dx + dy * dy)
+    scale = min(1.0, max(0.0, scale))  # clamp to the segment
+    proj_x, proj_y = start[0] + scale * dx, start[1] + scale * dy
+    return ((point[0] - proj_x) ** 2 + (point[1] - proj_y) ** 2) ** 0.5
+
+
+def _simplify_polyline(points: list[list[float]], tolerance: float) -> list[list[float]]:
+    """Douglas-Peucker simplification of a [lon, lat] polyline."""
+    if len(points) < 3:
+        return list(points)
+
+    def recurse(chunk: list[list[float]]) -> list[list[float]]:
+        if len(chunk) < 3:
+            return chunk
+        start, end = chunk[0], chunk[-1]
+        index, max_dist = 0, 0.0
+        for i in range(1, len(chunk) - 1):
+            dist = _perpendicular_distance(chunk[i], start, end)
+            if dist > max_dist:
+                index, max_dist = i, dist
+        if max_dist <= tolerance:
+            return [start, end]
+        left = recurse(chunk[: index + 1])
+        return left[:-1] + recurse(chunk[index:])
+
+    return recurse(points)
+
 
 def parse_gtfs_time(value: str) -> int:
     """Convert a GTFS HH:MM:SS time to seconds since midnight.
@@ -61,6 +98,7 @@ class GtfsData:
         routes_df = self._read_csv(directory / "routes.txt")
         trips_df = self._read_csv(directory / "trips.txt")
         stop_times_df = self._read_csv(directory / "stop_times.txt")
+        shapes_df = self._read_csv(directory / "shapes.txt")
 
         self.routes: dict[str, Route] = self._build_routes(routes_df)
 
@@ -87,6 +125,25 @@ class GtfsData:
             )
             self.trips_by_id[trip.trip_id] = trip
             self.trips_by_route[trip.route_id].append(trip)
+
+        # Shape index: shape_id -> ordered [lon, lat] points, plus the route
+        # and direction each shape belongs to (a shape is used by exactly one
+        # route in this feed).
+        self.shapes_by_id: dict[str, list[list[float]]] = {}
+        for shape_id, group in shapes_df.groupby("shape_id", sort=False):
+            ordered = group.sort_values("shape_pt_sequence", kind="stable")
+            self.shapes_by_id[shape_id] = [
+                [float(lon), float(lat)]
+                for lon, lat in zip(ordered["shape_pt_lon"], ordered["shape_pt_lat"], strict=True)
+            ]
+        self.route_by_shape: dict[str, str] = {}
+        self.direction_by_shape: dict[str, int | None] = {}
+        for row in trips_df.itertuples(index=False):
+            if row.shape_id and row.shape_id not in self.route_by_shape:
+                self.route_by_shape[row.shape_id] = row.route_id
+                self.direction_by_shape[row.shape_id] = (
+                    None if pd.isna(row.direction_id) else int(row.direction_id)
+                )
 
         # Service-day index: each day type maps to the service_ids running on
         # it, from the weekly pattern in calendar.txt (supplemental services
@@ -169,6 +226,82 @@ class GtfsData:
     def _read_csv(path: Path) -> pd.DataFrame:
         """Read a GTFS csv; every column as str, blank cells as empty strings."""
         return pd.read_csv(path, dtype=str, keep_default_na=False)
+
+    def route_shape(
+        self,
+        route_id: str,
+        direction_id: int | None = None,
+        simplify_tolerance: float | None = None,
+    ) -> list[list[float]]:
+        """Polyline ([lon, lat] pairs) covering a route's track.
+
+        With `direction_id` set, only shapes of that direction are used.
+        Otherwise all of the route's shapes are merged into one polyline.
+
+        `simplify_tolerance` (degrees, e.g. 0.0005) applies Douglas-Peucker
+        simplification to reduce the point count for map rendering.
+        """
+        shape_ids = [
+            shape_id
+            for shape_id in self.shapes_by_id
+            if self.route_by_shape.get(shape_id) == route_id
+            and (direction_id is None or self.direction_by_shape.get(shape_id) == direction_id)
+        ]
+        if not shape_ids:
+            return []
+        coordinates = (
+            self.shapes_by_id[max(shape_ids, key=lambda s: len(self.shapes_by_id[s]))]
+            if direction_id is not None
+            else self._merge_shapes(shape_ids)
+        )
+        if simplify_tolerance:
+            coordinates = _simplify_polyline(coordinates, simplify_tolerance)
+        return coordinates
+
+    def _merge_shapes(self, shape_ids: list[str]) -> list[list[float]]:
+        """Union several shape polylines into one continuous track.
+
+        The longest shape is the backbone. Other shapes share the trunk and
+        diverge near their ends (branch terminals, loops): for each, the
+        divergent tail (points after its last on-backbone point) is spliced
+        in at the backbone position where the shape left it, keeping the
+        result a single walkable polyline.
+        """
+        ordered = sorted(shape_ids, key=lambda s: len(self.shapes_by_id[s]), reverse=True)
+        backbone: list[list[float]] = list(self.shapes_by_id[ordered[0]])
+        for shape_id in ordered[1:]:
+            points = self.shapes_by_id[shape_id]
+            last_on_backbone = self._last_contained_index(backbone, points)
+            if last_on_backbone is None:
+                continue  # fully contained or unrelated; nothing new to add
+            tail = points[last_on_backbone + 1 :]
+            if not tail:
+                continue
+            # Splice the tail right after the backbone point the shape left from.
+            anchor = self._closest_index(backbone, points[last_on_backbone])
+            backbone[anchor + 1 : anchor + 1] = [list(p) for p in tail]
+        return backbone
+
+    @staticmethod
+    def _last_contained_index(
+        backbone: list[list[float]], points: list[list[float]], tol: float = 2e-4
+    ) -> int | None:
+        """Index of the last point of `points` that lies on the backbone."""
+        grid = {(round(p[0], 5), round(p[1], 5)) for p in backbone}
+        for i in range(len(points) - 1, -1, -1):
+            lon, lat = points[i]
+            if (round(lon, 5), round(lat, 5)) in grid:
+                return i
+        return None
+
+    @staticmethod
+    def _closest_index(
+        backbone: list[list[float]], point: list[float]
+    ) -> int:
+        return min(
+            range(len(backbone)),
+            key=lambda i: (backbone[i][0] - point[0]) ** 2 + (backbone[i][1] - point[1]) ** 2,
+        )
 
     @staticmethod
     def _build_routes(routes_df: pd.DataFrame) -> dict[str, Route]:

@@ -149,3 +149,69 @@ def test_load_data_is_cached() -> None:
     from subway_game_backend import gtfs
 
     assert gtfs.load_data() is gtfs.load_data()
+
+
+def test_shapes_loaded(data) -> None:
+    assert len(data.shapes_by_id) > 200  # 258 shape ids in this feed
+    points = data.shapes_by_id["1..N03R"]
+    assert len(points) > 100
+    lon, lat = points[0]
+    assert lon == pytest.approx(-74.013664)
+    assert lat == pytest.approx(40.702068)
+
+
+def test_every_shape_maps_to_a_route(data) -> None:
+    assert set(data.route_by_shape) == set(data.shapes_by_id)
+    assert set(data.route_by_shape.values()) <= set(data.routes)
+
+
+def test_route_shape_covers_line_ends(data) -> None:
+    """The merged polyline of the 1 spans Van Cortlandt Park to South Ferry."""
+    points = data.route_shape("1")
+    assert len(points) > 100
+    lons = [lon for lon, _ in points]
+    lats = [lat for _, lat in points]
+    # South Ferry ~(-74.0135, 40.7021), Van Cortlandt Park ~(-73.8986, 40.8892)
+    assert min(lats) == pytest.approx(40.702, abs=0.01)
+    assert max(lats) == pytest.approx(40.889, abs=0.01)
+    assert min(lons) == pytest.approx(-74.014, abs=0.01)
+
+
+def test_route_shape_no_double_backs(data) -> None:
+    points = data.route_shape("A")
+    jumps = [
+        ((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2) ** 0.5
+        for a, b in zip(points, points[1:])
+    ]
+    assert max(jumps) < 0.05  # no wild jumps between consecutive points
+
+
+def test_route_shape_by_direction(data) -> None:
+    both = data.route_shape("1")
+    up = data.route_shape("1", direction_id=0)
+    assert up
+    assert len(up) <= len(both)
+    assert all(-74.05 < lon < -73.75 for lon, _ in up)  # stays in NYC
+
+
+def test_route_shape_unknown_route(data) -> None:
+    assert data.route_shape("ZZ") == []
+
+
+def test_simplify_reduces_points(data) -> None:
+    full = data.route_shape("A")
+    slim = data.route_shape("A", simplify_tolerance=0.0005)
+    assert len(slim) < len(full) * 0.5
+    # Endpoints are always kept.
+    assert slim[0] == full[0]
+    assert slim[-1] == full[-1]
+
+
+def test_simplify_stays_close_to_full_path(data) -> None:
+    full = data.route_shape("1")
+    slim = data.route_shape("1", simplify_tolerance=0.0005)
+    for lon, lat in slim:
+        closest = min(
+            (abs(lon - flon) + abs(lat - flat) for flon, flat in full),
+        )
+        assert closest <= 0.001  # within ~110m of the real track

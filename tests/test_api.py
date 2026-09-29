@@ -41,6 +41,47 @@ def test_all_routes(data) -> None:
     assert route_ids[-1] == "SI"
 
 
+def test_get_route_shape() -> None:
+    response = client.get("/get_route_shape", params={"route_id": "1"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["route_id"] == "1"
+    assert body["direction_id"] is None
+    assert body["num_points"] == len(body["coordinates"]) > 100
+    lon, lat = body["coordinates"][0]
+    assert -74.1 < lon < -73.7  # sane NYC coordinates
+    assert 40.5 < lat < 40.95
+    assert len(body["coordinates"][0]) == 2  # [lon, lat] pairs
+
+
+def test_get_route_shape_simplified() -> None:
+    full = client.get("/get_route_shape", params={"route_id": "1"}).json()
+    slim = client.get(
+        "/get_route_shape", params={"route_id": "1", "simplify": "true"}
+    ).json()
+    assert slim["num_points"] < full["num_points"]
+
+
+def test_get_route_shape_direction() -> None:
+    response = client.get(
+        "/get_route_shape", params={"route_id": "1", "direction_id": 1}
+    )
+    assert response.status_code == 200
+    assert response.json()["direction_id"] == 1
+
+
+def test_get_route_shape_unknown_route() -> None:
+    assert client.get("/get_route_shape", params={"route_id": "ZZ"}).status_code == 404
+
+
+def test_get_route_shape_unknown_direction() -> None:
+    # The L runs both directions; direction 7 is nonsense.
+    assert (
+        client.get("/get_route_shape", params={"route_id": "L", "direction_id": 7}).status_code
+        == 422
+    )
+
+
 def test_all_routes_entries_are_queryable() -> None:
     """Every listed route id must be retrievable via /get_route."""
     for route_id in client.get("/all_routes").json():
