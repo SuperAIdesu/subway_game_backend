@@ -1,2 +1,10 @@
+"""NYC subway GTFS API backend."""
+
+import uvicorn
+
+from .main import app
+
+
 def main() -> None:
-    print("Hello from subway-game-backend!")
+    """Run the API locally (entry point: `subway-game-backend`)."""
+    uvicorn.run(app, host="127.0.0.1", port=8000)
