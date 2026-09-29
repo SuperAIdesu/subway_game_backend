@@ -42,6 +42,7 @@ yield `422`.
 | `GET /get_trips` | `route_id` | Trips of a line (headsign, direction, service, shape) |
 | `GET /get_trip_stoptimes` | `trip_id` | A trip's schedule in stop order |
 | `GET /get_next_trips` | `station_id`, `time`, `day?`, `limit?` | Upcoming trips at a station, soonest first |
+| `GET /get_route_shape` | `route_id`, `direction_id?`, `simplify?` | Track polyline of a line, for map plotting |
 
 Example — next 3 trips at Times Sq on Sunday after noon:
 
@@ -60,6 +61,16 @@ curl "http://127.0.0.1:8000/get_next_trips?station_id=127&time=12:00:00&day=sund
   `stop_sequence` at the requested station.
 - GTFS times may exceed 24 h (e.g. `25:56:30` = 1:56:30 AM the next day).
 
+### `/get_route_shape` details
+
+- Returns `route_id`, `direction_id`, `coordinates` (`[lon, lat]` pairs,
+  GeoJSON order — drop-in for Leaflet/Mapbox polylines) and `num_points`.
+- Without `direction_id`, all shapes of the line are merged into one polyline
+  (longest shape as backbone, branch terminals spliced in); with
+  `direction_id=0|1` only that direction's shapes are used.
+- `simplify=true` applies Douglas-Peucker reduction (~55 m tolerance),
+  shrinking e.g. the A from 1,312 to ~52 points for lighter map payloads.
+
 ## Configuration
 
 | Variable | Default | Purpose |
@@ -70,7 +81,7 @@ curl "http://127.0.0.1:8000/get_next_trips?station_id=127&time=12:00:00&day=sund
 
 ```bash
 uv sync --dev
-uv run pytest        # 44 tests; loads the real feed once (~20s)
+uv run pytest        # 57 tests; loads the real feed once (~20s)
 ```
 
 Tests cover the loader (`tests/test_gtfs.py`) and the endpoints

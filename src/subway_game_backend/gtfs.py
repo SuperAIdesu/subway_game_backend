@@ -129,6 +129,9 @@ class GtfsData:
         # Shape index: shape_id -> ordered [lon, lat] points, plus the route
         # and direction each shape belongs to (a shape is used by exactly one
         # route in this feed).
+        shapes_df["shape_pt_sequence"] = pd.to_numeric(
+            shapes_df["shape_pt_sequence"], errors="coerce"
+        )
         self.shapes_by_id: dict[str, list[list[float]]] = {}
         for shape_id, group in shapes_df.groupby("shape_id", sort=False):
             ordered = group.sort_values("shape_pt_sequence", kind="stable")
