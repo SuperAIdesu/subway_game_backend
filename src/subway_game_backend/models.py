@@ -67,14 +67,3 @@ class NextTrip(Trip):
     arrival_time: str
     departure_time: str
     stop_sequence: int
-
-
-class FeedInfo(BaseModel):
-    """Feed metadata (GTFS `feed_info.txt`)."""
-
-    feed_publisher_name: str
-    feed_publisher_url: str
-    feed_lang: str
-    feed_start_date: str
-    feed_end_date: str
-    feed_version: str
