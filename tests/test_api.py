@@ -13,6 +13,40 @@ def test_root() -> None:
     assert response.json() == {"status": "ok", "spec": "/docs"}
 
 
+def test_all_stations(data) -> None:
+    response = client.get("/all_stations")
+    assert response.status_code == 200
+    ids = response.json()
+    assert all(isinstance(station_id, str) for station_id in ids)
+    assert len(ids) == len(set(ids))
+    assert set(ids) == set(data.stations)
+    assert "101" in ids
+
+
+def test_all_stations_entries_are_queryable() -> None:
+    """Every listed station id must be retrievable via /get_station."""
+    for station_id in client.get("/all_stations").json():
+        assert client.get("/get_station", params={"station_id": station_id}).status_code == 200
+
+
+def test_all_routes(data) -> None:
+    response = client.get("/all_routes")
+    assert response.status_code == 200
+    route_ids = response.json()
+    assert all(isinstance(route_id, str) for route_id in route_ids)
+    assert len(route_ids) == len(set(route_ids))
+    assert set(route_ids) == set(data.routes)
+    # Canonical MTA order: A/C/E first, Staten Island Railway last.
+    assert route_ids[:3] == ["A", "C", "E"]
+    assert route_ids[-1] == "SI"
+
+
+def test_all_routes_entries_are_queryable() -> None:
+    """Every listed route id must be retrievable via /get_route."""
+    for route_id in client.get("/all_routes").json():
+        assert client.get("/get_route", params={"route_id": route_id}).status_code == 200
+
+
 def test_get_station() -> None:
     response = client.get("/get_station", params={"station_id": "101"})
     assert response.status_code == 200

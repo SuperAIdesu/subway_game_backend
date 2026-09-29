@@ -12,13 +12,35 @@ from .models import NextTrip, Route, Station, StopTime, Trip
 app = FastAPI(
     title="NYC Subway GTFS API",
     description="API over MTA subway GTFS data: lines, stations, trips, stop times.",
-    version="0.2.0",
+    version="0.3.0",
 )
 
 
 @app.get("/", operation_id="health")
 def root() -> dict[str, str]:
     return {"status": "ok", "spec": "/docs"}
+
+
+@app.get("/all_stations", response_model=list[str], operation_id="all_stations")
+def all_stations() -> list[str]:
+    """List every station id (ordered by station name), each queryable via `/get_station`."""
+    data = gtfs.load_data()
+    ordered = sorted(data.stations.values(), key=lambda station: (station.name.casefold(), station.id))
+    return [station.id for station in ordered]
+
+
+@app.get("/all_routes", response_model=list[str], operation_id="all_routes")
+def all_routes() -> list[str]:
+    """List every route id in GTFS `route_sort_order` (canonical MTA line order)."""
+    data = gtfs.load_data()
+    ordered = sorted(
+        data.routes.values(),
+        key=lambda route: (
+            route.route_sort_order if route.route_sort_order is not None else 10**9,
+            route.route_id,
+        ),
+    )
+    return [route.route_id for route in ordered]
 
 
 @app.get("/get_station", response_model=Station, operation_id="get_station")
