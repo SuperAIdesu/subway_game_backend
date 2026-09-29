@@ -117,6 +117,18 @@ def test_next_trips_unknown_station(data) -> None:
         data.next_trips("NOPE", "00:00:00", limit=5)
 
 
+def test_next_trips_without_limit_returns_all(data) -> None:
+    """With limit=None, every remaining trip of the day is returned."""
+    trips = data.next_trips("101", "00:00:00", limit=None, day="sunday")
+    allowed = data.services_by_day["sunday"]
+    expected = [
+        departure
+        for departure in data.departures_by_station["101"]
+        if data.trips_by_id[departure.trip_id].service_id in allowed
+    ]
+    assert len(trips) == len(expected) > 20
+
+
 def test_services_by_day(data) -> None:
     assert "Weekday" in data.services_by_day["weekday"]
     assert "Saturday" in data.services_by_day["saturday"]

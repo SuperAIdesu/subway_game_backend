@@ -223,9 +223,12 @@ class GtfsData:
         return route_stations
 
     def next_trips(
-        self, station_id: str, time: str, limit: int, day: str = "weekday"
+        self, station_id: str, time: str, limit: int | None = None, day: str = "weekday"
     ) -> list[NextTrip]:
-        """Trips arriving at the station at or after `time` on the given day."""
+        """Trips arriving at the station at or after `time` on the given day.
+
+        With `limit=None` (the default), every remaining trip of the day is returned.
+        """
         departures = self.departures_by_station.get(station_id)
         if departures is None:
             raise KeyError(station_id)
@@ -246,7 +249,7 @@ class GtfsData:
                     stop_sequence=departure.stop_sequence,
                 )
             )
-            if len(results) == limit:
+            if limit is not None and len(results) == limit:
                 break
         return results
 

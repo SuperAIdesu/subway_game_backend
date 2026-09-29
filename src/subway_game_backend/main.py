@@ -14,7 +14,7 @@ from .models import NextTrip, Route, Station, StopTime, Trip
 app = FastAPI(
     title="NYC Subway GTFS API",
     description="API over MTA subway GTFS data: lines, stations, trips, stop times.",
-    version="0.4.0",
+    version="0.5.0",
 )
 
 
@@ -115,11 +115,10 @@ def get_next_trips(
         default="weekday",
         description="Service day to filter by: weekday, saturday or sunday",
     ),
-    limit: int = Query(
-        default=20,
+    limit: int | None = Query(
+        default=None,
         ge=1,
-        le=100,
-        description="Maximum number of trips to return",
+        description="Maximum number of trips to return; omit to get all remaining trips of the day",
     ),
 ) -> list[NextTrip]:
     """Get upcoming trips at a station after the given time, soonest first.

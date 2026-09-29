@@ -160,12 +160,17 @@ def test_get_next_trips_respects_time_and_limit() -> None:
     assert all(arrival >= "12:00:00" for arrival in arrivals)
 
 
-def test_get_next_trips_default_limit() -> None:
-    response = client.get(
-        "/get_next_trips", params={"station_id": "127", "time": "12:00:00"}
-    )
+def test_get_next_trips_without_limit_returns_all(data) -> None:
+    """Omitting `limit` must return every remaining trip of the day."""
+    response = client.get("/get_next_trips", params={"station_id": "127", "time": "12:00:00"})
     assert response.status_code == 200
-    assert len(response.json()) <= 20
+    trips = response.json()
+    arrivals = [trip["arrival_time"] for trip in trips]
+    assert arrivals == sorted(arrivals)
+    assert all(arrival >= "12:00:00" for arrival in arrivals)
+    assert len(trips) > 20  # not capped at the old default
+    allowed = data.services_by_day["weekday"]
+    assert all(trip["service_id"] in allowed for trip in trips)
 
 
 def test_get_next_trips_unknown_station() -> None:
