@@ -117,6 +117,22 @@ def test_next_trips_unknown_station(data) -> None:
         data.next_trips("NOPE", "00:00:00", limit=5)
 
 
+def test_services_by_day(data) -> None:
+    assert "Weekday" in data.services_by_day["weekday"]
+    assert "Saturday" in data.services_by_day["saturday"]
+    assert "Sunday" in data.services_by_day["sunday"]
+    # Dated supplement calendars belong to the day they serve.
+    assert any(s.startswith("Sunday-H-") for s in data.services_by_day["sunday"])
+    assert "Sunday" not in data.services_by_day["weekday"]
+
+
+def test_next_trips_filtered_by_day(data) -> None:
+    for day in ("weekday", "saturday", "sunday"):
+        trips = data.next_trips("101", "12:00:00", limit=5, day=day)
+        assert trips, day
+        assert all(trip.service_id in data.services_by_day[day] for trip in trips)
+
+
 def test_load_data_is_cached() -> None:
     from subway_game_backend import gtfs
 

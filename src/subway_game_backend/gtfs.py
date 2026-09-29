@@ -11,7 +11,7 @@ import os
 from collections import defaultdict
 from functools import lru_cache
 from pathlib import Path
-from typing import NamedTuple
+from typing import Literal, NamedTuple
 
 import pandas as pd
 
@@ -19,6 +19,9 @@ from .models import NextTrip, Route, Station, StopTime, Trip
 
 #: Query-param pattern for GTFS local times (HH:MM:SS, hours may exceed 23).
 GTFS_TIME_PATTERN = r"^\d{1,2}:\d{2}:\d{2}$"
+
+#: Service-day types accepted by `get_next_trips`, mapped to calendar columns.
+DayType = Literal["weekday", "saturday", "sunday"]
 
 
 def parse_gtfs_time(value: str) -> int:
@@ -84,6 +87,24 @@ class GtfsData:
             )
             self.trips_by_id[trip.trip_id] = trip
             self.trips_by_route[trip.route_id].append(trip)
+
+        # Service-day index: each day type maps to the service_ids running on
+        # it, from the weekly pattern in calendar.txt (supplemental services
+        # like "Sunday-H-..." share the pattern of the day they serve).
+        self.services_by_day: dict[str, set[str]] = {
+            "weekday": set(),
+            "saturday": set(),
+            "sunday": set(),
+        }
+        calendar_path = directory / "calendar.txt"
+        if calendar_path.exists():
+            for row in self._read_csv(calendar_path).itertuples(index=False):
+                if "1" in (row.monday, row.tuesday, row.wednesday, row.thursday, row.friday):
+                    self.services_by_day["weekday"].add(row.service_id)
+                if row.saturday == "1":
+                    self.services_by_day["saturday"].add(row.service_id)
+                if row.sunday == "1":
+                    self.services_by_day["sunday"].add(row.service_id)
 
         stop_times_df["stop_sequence"] = pd.to_numeric(
             stop_times_df["stop_sequence"], errors="coerce"
@@ -201,17 +222,22 @@ class GtfsData:
             route_stations[route_id] = ordered
         return route_stations
 
-    def next_trips(self, station_id: str, time: str, limit: int) -> list[NextTrip]:
-        """Trips arriving at the station at or after `time`, soonest first."""
+    def next_trips(
+        self, station_id: str, time: str, limit: int, day: str = "weekday"
+    ) -> list[NextTrip]:
+        """Trips arriving at the station at or after `time` on the given day."""
         departures = self.departures_by_station.get(station_id)
         if departures is None:
             raise KeyError(station_id)
+        allowed_services = self.services_by_day.get(day, set())
         threshold = parse_gtfs_time(time)
         results: list[NextTrip] = []
         for departure in departures:
             if departure.arrival_sec < threshold:
                 continue
             trip = self.trips_by_id[departure.trip_id]
+            if trip.service_id not in allowed_services:
+                continue
             results.append(
                 NextTrip.model_construct(
                     **trip.model_dump(),

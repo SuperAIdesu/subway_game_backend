@@ -139,7 +139,8 @@ def test_get_next_trips_matches_trip_stoptimes(data) -> None:
     station_id = data.child_to_parent.get(first_stop["stop_id"], first_stop["stop_id"])
 
     response = client.get(
-        "/get_next_trips", params={"station_id": station_id, "time": "00:00:00", "limit": 100}
+        "/get_next_trips",
+        params={"station_id": station_id, "time": "00:00:00", "day": "sunday", "limit": 100},
     )
     assert response.status_code == 200
     next_trips = response.json()
@@ -172,6 +173,33 @@ def test_get_next_trips_unknown_station() -> None:
         "/get_next_trips", params={"station_id": "NOPE", "time": "12:00:00"}
     )
     assert response.status_code == 404
+
+
+def test_get_next_trips_day_filter(data) -> None:
+    """Only trips on the requested day's service calendars may be returned."""
+    for day in ("weekday", "saturday", "sunday"):
+        response = client.get(
+            "/get_next_trips", params={"station_id": "101", "time": "12:00:00", "day": day, "limit": 10}
+        )
+        assert response.status_code == 200
+        trips = response.json()
+        assert trips, day
+        assert all(trip["service_id"] in data.services_by_day[day] for trip in trips)
+
+
+def test_get_next_trips_defaults_to_weekday(data) -> None:
+    response = client.get("/get_next_trips", params={"station_id": "101", "time": "12:00:00"})
+    assert response.status_code == 200
+    trips = response.json()
+    assert trips
+    assert all(trip["service_id"] in data.services_by_day["weekday"] for trip in trips)
+
+
+def test_get_next_trips_unknown_day() -> None:
+    response = client.get(
+        "/get_next_trips", params={"station_id": "101", "time": "12:00:00", "day": "funday"}
+    )
+    assert response.status_code == 422
 
 
 def test_get_next_trips_invalid_time() -> None:

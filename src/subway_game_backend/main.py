@@ -4,6 +4,8 @@ Endpoints serve the feed in `gtfs_subway/` (or `$GTFS_DATA_DIR`), loaded into
 memory by `gtfs.load_data()` on first use.
 """
 
+from typing import Literal
+
 from fastapi import FastAPI, HTTPException, Query
 
 from . import gtfs
@@ -12,7 +14,7 @@ from .models import NextTrip, Route, Station, StopTime, Trip
 app = FastAPI(
     title="NYC Subway GTFS API",
     description="API over MTA subway GTFS data: lines, stations, trips, stop times.",
-    version="0.3.0",
+    version="0.4.0",
 )
 
 
@@ -109,6 +111,10 @@ def get_next_trips(
         pattern=gtfs.GTFS_TIME_PATTERN,
         description="Local time HH:MM:SS; returns trips arriving at or after it",
     ),
+    day: gtfs.DayType = Query(
+        default="weekday",
+        description="Service day to filter by: weekday, saturday or sunday",
+    ),
     limit: int = Query(
         default=20,
         ge=1,
@@ -116,9 +122,13 @@ def get_next_trips(
         description="Maximum number of trips to return",
     ),
 ) -> list[NextTrip]:
-    """Get upcoming trips at a station after the given time, soonest first."""
+    """Get upcoming trips at a station after the given time, soonest first.
+
+    Trips are filtered to the service calendars running on the requested day
+    (weekday / saturday / sunday), including dated service supplements.
+    """
     data = gtfs.load_data()
     try:
-        return data.next_trips(station_id, time, limit)
+        return data.next_trips(station_id, time, limit, day=day)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Unknown station id: {station_id}") from None
