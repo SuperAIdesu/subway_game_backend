@@ -7,15 +7,17 @@ departures sorted by time. `load_data` caches the result, so the load cost is
 paid once per process.
 """
 
+import gc
 import os
 from collections import defaultdict
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal, NamedTuple
 
 import pandas as pd
 
-from .models import NextTrip, Route, Station, StopTime, Trip
+from .models import NextTrip, Route, Station, Trip
 
 #: Query-param pattern for GTFS local times (HH:MM:SS, hours may exceed 23).
 GTFS_TIME_PATTERN = r"^\d{1,2}:\d{2}:\d{2}$"
@@ -80,14 +82,32 @@ def gtfs_dir() -> Path:
 
 
 class Departure(NamedTuple):
-    """One stop_time entry, indexed by the parent station it belongs to."""
+    """One stop_time entry, indexed by the parent station it belongs to.
 
-    arrival_time: str
-    departure_time: str
+    Only the indexed/search fields are kept; the display strings
+    (`arrival_time` / `departure_time`) are looked up from
+    `stop_times_by_trip` on demand, since they already live there.
+    """
+
     arrival_sec: int
     departure_sec: int
     stop_sequence: int
     trip_id: str
+
+
+@dataclass(slots=True, frozen=True)
+class StopTimeRecord:
+    """Slotted, read-only stop_time entry (kept small: ~1.5M rows are indexed).
+
+    Stored instead of the Pydantic `StopTime` model, which costs ~200 B per
+    instance; conversion happens only when serving `/get_trip_stoptimes`.
+    """
+
+    trip_id: str
+    stop_id: str
+    arrival_time: str
+    departure_time: str
+    stop_sequence: int
 
 
 class GtfsData:
@@ -178,10 +198,10 @@ class GtfsData:
             ["trip_id", "stop_sequence"], kind="stable"
         ).reset_index(drop=True)
 
-        self.stop_times_by_trip: dict[str, list[StopTime]] = {}
+        self.stop_times_by_trip: dict[str, list[StopTimeRecord]] = {}
         for trip_id, group in stop_times_df.groupby("trip_id", sort=False):
             self.stop_times_by_trip[trip_id] = [
-                StopTime.model_construct(
+                StopTimeRecord(
                     trip_id=trip_id,
                     stop_id=row.stop_id,
                     arrival_time=row.arrival_time,
@@ -196,8 +216,6 @@ class GtfsData:
         for station_id, group in stop_times_df.groupby("parent_id", sort=False):
             departures = [
                 Departure(
-                    arrival_time=row.arrival_time,
-                    departure_time=row.departure_time,
                     arrival_sec=int(row.arrival_sec),
                     departure_sec=int(row.departure_sec),
                     stop_sequence=int(row.stop_sequence),
@@ -224,6 +242,19 @@ class GtfsData:
             )
             for row in parent_rows.itertuples(index=False)
         }
+
+        # Drop the large transient DataFrames (and their parser temporaries)
+        # so the process settles at the steady-state footprint of the indexes.
+        del (
+            stops_df,
+            routes_df,
+            trips_df,
+            stop_times_df,
+            shapes_df,
+            parent_rows,
+            lines_by_station,
+        )
+        gc.collect()
 
     @staticmethod
     def _read_csv(path: Path) -> pd.DataFrame:
@@ -377,11 +408,16 @@ class GtfsData:
             trip = self.trips_by_id[departure.trip_id]
             if trip.service_id not in allowed_services:
                 continue
+            stop_time = next(
+                st
+                for st in self.stop_times_by_trip[departure.trip_id]
+                if st.stop_sequence == departure.stop_sequence
+            )
             results.append(
                 NextTrip.model_construct(
                     **trip.model_dump(),
-                    arrival_time=departure.arrival_time,
-                    departure_time=departure.departure_time,
+                    arrival_time=stop_time.arrival_time,
+                    departure_time=stop_time.departure_time,
                     stop_sequence=departure.stop_sequence,
                 )
             )

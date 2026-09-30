@@ -101,7 +101,16 @@ def get_trip_stoptimes(
     stop_times = data.stop_times_by_trip.get(trip_id)
     if stop_times is None:
         raise HTTPException(status_code=404, detail=f"Unknown trip id: {trip_id}")
-    return stop_times
+    return [
+        StopTime.model_construct(
+            trip_id=record.trip_id,
+            stop_id=record.stop_id,
+            arrival_time=record.arrival_time,
+            departure_time=record.departure_time,
+            stop_sequence=record.stop_sequence,
+        )
+        for record in stop_times
+    ]
 
 
 @app.get("/get_route_shape", response_model=RouteShape, operation_id="get_route_shape")
